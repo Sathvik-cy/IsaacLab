@@ -177,7 +177,7 @@ class A1RewardsCfg:
     # -- task
     air_time = RewardTermCfg(
         func=a1_mdp.air_time_reward,
-        weight=5.0,
+        weight=0.5,
         params={
             "mode_time": 0.3,
             "velocity_threshold": 0.5,
@@ -187,17 +187,17 @@ class A1RewardsCfg:
     )
     base_angular_velocity = RewardTermCfg(
         func=a1_mdp.base_angular_velocity_reward,
-        weight=5.0,
+        weight=0.5,
         params={"std": 2.0, "asset_cfg": SceneEntityCfg("robot")},
     )
     base_linear_velocity = RewardTermCfg(
         func=a1_mdp.base_linear_velocity_reward,
-        weight=5.0,
+        weight=1.5,
         params={"std": 1.0, "ramp_rate": 0.5, "ramp_at_vel": 1.0, "asset_cfg": SceneEntityCfg("robot")},
     )
     foot_clearance = RewardTermCfg(
         func=a1_mdp.foot_clearance_reward,
-        weight=0.5,
+        weight=0.05,
         params={
             "std": 0.05,
             "tanh_mult": 2.0,
@@ -207,6 +207,19 @@ class A1RewardsCfg:
     )
 
     # -- penalties
+
+    base_motion = RewardTermCfg(
+        func=a1_mdp.base_motion_penalty, weight=-1.0, params={"asset_cfg": SceneEntityCfg("robot")}
+    )
+
+    base_angular_motion = RewardTermCfg(
+        func=a1_mdp.base_angular_motion_penalty, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot")}
+    )
+
+    base_orientation = RewardTermCfg(
+        func=a1_mdp.base_orientation_penalty, weight=-1.0, params={"asset_cfg": SceneEntityCfg("robot")}
+    )
+
     action_smoothness = RewardTermCfg(func=a1_mdp.action_smoothness_penalty, weight=-0.001)
 
     foot_slip = RewardTermCfg(
@@ -238,6 +251,40 @@ class A1RewardsCfg:
         }
     )
 
+    joint_acc = RewardTermCfg(
+        func=a1_mdp.joint_acceleration_penalty,
+        weight=-1.0e-4,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
+    )
+    joint_pos = RewardTermCfg(
+        func=a1_mdp.joint_position_penalty,
+        weight=-0.04,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_thigh_joint", ".*_calf_joint"]),
+            "stand_still_scale": 5.0,
+            "velocity_threshold": 0.5,
+        },
+    )
+    hip_pos = RewardTermCfg(
+        func=a1_mdp.joint_position_penalty,
+        weight=-0.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*_hip_joint"),
+            "stand_still_scale": 5.0,
+            "velocity_threshold": 0.5,
+        },
+    )
+    joint_torques = RewardTermCfg(
+        func=a1_mdp.joint_torques_penalty,
+        weight=-1.0e-4,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
+    )
+    joint_vel = RewardTermCfg(
+        func=a1_mdp.joint_velocity_penalty,
+        weight=-1.0e-2,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
+    )
+
 @configclass
 class A1TerminationsCfg:
     """Termination terms for the MDP."""
@@ -250,7 +297,93 @@ class A1TerminationsCfg:
 
 
 @configclass
-class SpotCurriculumCfg:
+class A1CurriculumCfg:
     """Curriculum terms for the MDP."""
 
     pass
+
+@configclass
+class A1EnvCfg(LocomotionVelocityRoughEnvCfg):
+
+    # Basic settings'
+    observations: A1ObservationsCfg = A1ObservationsCfg()
+    actions: A1ActionsCfg = A1ActionsCfg()
+    commands: A1CommandsCfg = A1CommandsCfg()
+
+    # MDP setting
+    rewards: A1RewardsCfg = A1RewardsCfg()
+    terminations: A1TerminationsCfg = A1TerminationsCfg()
+    events: A1EventCfg = A1EventCfg()
+    curriculum: A1CurriculumCfg = A1CurriculumCfg()
+
+    # Viewer
+    viewer = ViewerCfg(eye=(10.5, 10.5, 0.3), origin_type="world", env_index=0, asset_name="robot")
+
+    def __post_init__(self):
+        # post init of parent
+        super().__post_init__()
+
+        # general settings
+        self.decimation = 10  # 50 Hz
+        self.episode_length_s = 20.0
+        # simulation settings
+        self.sim.dt = 0.002  # 500 Hz
+        self.sim.render_interval = self.decimation
+        self.sim.disable_contact_processing = True
+        self.sim.physics_material.static_friction = 1.0
+        self.sim.physics_material.dynamic_friction = 1.0
+        self.sim.physics_material.friction_combine_mode = "multiply"
+        self.sim.physics_material.restitution_combine_mode = "multiply"
+        # update sensor update periods
+        # we tick all the sensors based on the smallest update period (physics update period)
+        self.scene.contact_forces.update_period = self.sim.dt
+
+        # switch robot to Spot-d
+        self.scene.robot = UNITREE_A1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+
+        # terrain
+        self.scene.terrain = TerrainImporterCfg(
+            prim_path="/World/ground",
+            terrain_type="generator",
+            terrain_generator=A1_PARKOUR_CFG,
+            max_init_terrain_level=A1_PARKOUR_CFG.num_rows - 1,
+            collision_group=-1,
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="multiply",
+                restitution_combine_mode="multiply",
+                static_friction=1.0,
+                dynamic_friction=1.0,
+            ),
+            visual_material=sim_utils.MdlFileCfg(
+                mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
+                project_uvw=True,
+                texture_scale=(0.25, 0.25),
+            ),
+            debug_vis=True,
+        )
+
+        # no height scan
+        self.scene.height_scanner = None
+
+class A1EnvCfg_PLAY(A1EnvCfg):
+    def __post_init__(self) -> None:
+        # post init of parent
+        super().__post_init__()
+
+        # make a smaller scene for play
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        # spawn the robot randomly in the grid (instead of their terrain levels)
+        self.scene.terrain.max_init_terrain_level = None
+
+        # reduce the number of terrains to save memory
+        if self.scene.terrain.terrain_generator is not None:
+            self.scene.terrain.terrain_generator.num_rows = 5
+            self.scene.terrain.terrain_generator.num_cols = 5
+            self.scene.terrain.terrain_generator.curriculum = False
+
+        # disable randomization for play
+        self.observations.policy.enable_corruption = False
+        # remove random pushing event
+        # self.events.base_external_force_torque = None
+        # self.events.push_robot = None
