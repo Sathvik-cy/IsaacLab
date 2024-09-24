@@ -62,7 +62,6 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": a1_env_cfg.A1EnvCfg,
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:UnitreeA1RoughPPORunnerCfg",
-        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_rough_ppo_cfg.yaml",
     },
 )
 
@@ -73,6 +72,5 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": a1_env_cfg.A1EnvCfg_PLAY,
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:UnitreeA1RoughPPORunnerCfg",
-        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_rough_ppo_cfg.yaml",
     },
 )

@@ -4,21 +4,31 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import omni.isaac.lab.sim as sim_utils
+import omni.isaac.core.utils.prims as prim_utils
 import omni.isaac.lab.terrains as terrain_gen
 from omni.isaac.lab.envs import ViewerCfg
+from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg
+from omni.isaac.lab.envs import ManagerBasedRLEnvCfg
 from omni.isaac.lab.managers import EventTermCfg as EventTerm
 from omni.isaac.lab.managers import ObservationGroupCfg as ObsGroup
 from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
 from omni.isaac.lab.managers import RewardTermCfg, SceneEntityCfg
 from omni.isaac.lab.managers import TerminationTermCfg as DoneTerm
+from omni.isaac.lab.managers import CurriculumTermCfg as CurrTerm
+from omni.isaac.lab.scene import InteractiveSceneCfg
+from omni.isaac.lab.sensors import ContactSensorCfg, RayCasterCfg, patterns
 from omni.isaac.lab.terrains import TerrainImporterCfg
 from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.utils.assets import ISAACLAB_NUCLEUS_DIR
+from omni.isaac.lab.utils.assets import ISAACLAB_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from omni.isaac.lab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+from omni.isaac.lab.assets import DeformableObject, DeformableObjectCfg
+import numpy as np
 
 import omni.isaac.lab_tasks.manager_based.locomotion.velocity.config.a1.mdp as a1_mdp
 import omni.isaac.lab_tasks.manager_based.locomotion.velocity.mdp as mdp
 from omni.isaac.lab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
+
+Pose_Command_Action = LocomotionVelocityRoughEnvCfg()
 
 ##
 # Pre-defined configs
@@ -29,8 +39,8 @@ from omni.isaac.lab_assets.unitree import UNITREE_A1_CFG  # isort: skip
 A1_PARKOUR_CFG = terrain_gen.TerrainGeneratorCfg(
     size=(8.0, 8.0),
     border_width=20.0,
-    num_rows=9,
-    num_cols=21,
+    num_rows=10,
+    num_cols=10,
     horizontal_scale=0.1,
     vertical_scale=0.005,
     slope_threshold=0.75,
@@ -41,34 +51,62 @@ A1_PARKOUR_CFG = terrain_gen.TerrainGeneratorCfg(
         "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
             proportion=0.2, noise_range=(0.02, 0.05), noise_step=0.02, border_width=0.25
         ),
-        "stones": terrain_gen.HfSteppingStonesTerrainCfg(
-            proportion=0.3, stone_distance_range=(0.1, 0.1), stone_height_max=0.10, stone_width_range=(0.25, 0.30), 
-        )
+        "slope": terrain_gen.HfPyramidSlopedTerrainCfg(proportion=0.2,
+            slope_range=(0.1, 0.3), platform_width=0.4),
     },
 )
+
+# Define terrain boundaries based on the terrain configuration
+x_min, x_max = -A1_PARKOUR_CFG.size[0] / 2, A1_PARKOUR_CFG.size[0] / 2
+y_min, y_max = -A1_PARKOUR_CFG.size[1] / 2, A1_PARKOUR_CFG.size[1] / 2
+z_min, z_max = 0.0, 0.1  # Assuming the terrain is flat
+
+
+    
 
 @configclass
 class A1ActionsCfg:
     """Action specifications for the MDP."""
 
-    joint_pos = mdp.JointPositionActionCfg(asset_name="robot", joint_names=[".*"], scale=0.2, use_default_offset=True)
+    pre_trained_policy_action: a1_mdp.PreTrainedPolicyActionCfg = a1_mdp.PreTrainedPolicyActionCfg(
+    asset_name="robot",
+    policy_path=f"{ISAACLAB_NUCLEUS_DIR}/Policies/ANYmal-C/Blind/policy.pt",
+    low_level_decimation=4,
+    low_level_actions= Pose_Command_Action.actions.joint_pos,
+    low_level_observations=Pose_Command_Action.observations.policy,
+)
 
 
 @configclass
 class A1CommandsCfg:
     """Command specifications for the MDP."""
 
-    base_velocity = mdp.UniformVelocityCommandCfg(
+    # base_velocity = mdp.UniformVelocityCommandCfg(
+    #     asset_name="robot",
+    #     resampling_time_range=(10.0, 10.0),
+    #     rel_standing_envs=0.02,
+    #     rel_heading_envs=1.0,
+    #     heading_command=True,
+    #     heading_control_stiffness=0.5,
+    #     debug_vis=False,
+    #     ranges=mdp.UniformVelocityCommandCfg.Ranges(
+    #         lin_vel_x=(-1.0, 1.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-1.0, 1.0), heading=(-np.pi, np.pi)
+    #     ),
+    # )
+
+
+    """for the "pos_z range", refer to the terrain noise range, which generally represents the min and max height of the terrain""" 
+    pose_command = mdp.UniformPose2dCommandCfg(
         asset_name="robot",
-        resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.0,
-        rel_heading_envs=0.6,
-        heading_command=True,
-        debug_vis=True,
-        ranges=mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 3.0), lin_vel_y=(-0.3, 0.3), ang_vel_z=(-0.1, 0.1), heading=(-1.6, 1.6)
-        ),
+        resampling_time_range=(8.0, 8.0),
+        debug_vis=False,
+        simple_heading=False,
+        ranges=mdp.UniformPose2dCommandCfg.Ranges(
+            pos_x=(x_min, x_max), pos_y=(y_min, y_max), heading=(0, np.pi)
+        )
     )
+
+
 
 @configclass
 class A1ObservationsCfg:
@@ -79,24 +117,19 @@ class A1ObservationsCfg:
         """Observations for policy group."""
 
         # `` observation terms (order preserved)
-        base_lin_vel = ObsTerm(
-            func=mdp.base_lin_vel, params={"asset_cfg": SceneEntityCfg("robot")}, noise=Unoise(n_min=-0.1, n_max=0.1)
-        )
-        base_ang_vel = ObsTerm(
-            func=mdp.base_ang_vel, params={"asset_cfg": SceneEntityCfg("robot")}, noise=Unoise(n_min=-0.1, n_max=0.1)
-        )
         projected_gravity = ObsTerm(
             func=mdp.projected_gravity,
             params={"asset_cfg": SceneEntityCfg("robot")},
             noise=Unoise(n_min=-0.05, n_max=0.05),
         )
-        velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
-        joint_pos = ObsTerm(
-            func=mdp.joint_pos_rel, params={"asset_cfg": SceneEntityCfg("robot")}, noise=Unoise(n_min=-0.05, n_max=0.05)
-        )
-        joint_vel = ObsTerm(
-            func=mdp.joint_vel_rel, params={"asset_cfg": SceneEntityCfg("robot")}, noise=Unoise(n_min=-0.5, n_max=0.5)
-        )
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        pose_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "pose_command"})
+        # height_scan = ObsTerm(
+        #     func=mdp.height_scan,
+        #     params={"sensor_cfg": SceneEntityCfg("height_scanner")},
+        #     noise=Unoise(n_min=-0.1, n_max=0.1),
+        #     clip=(-1.0, 1.0),
+        # )
         actions = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
@@ -116,23 +149,33 @@ class A1EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.3, 1.0),
-            "dynamic_friction_range": (0.3, 0.8),
+            "static_friction_range": (0.8, 0.8),
+            "dynamic_friction_range": (0.6, 0.6),
             "restitution_range": (0.0, 0.0),
             "num_buckets": 64,
         },
     )
 
-    # reset
-    base_external_force_torque = EventTerm(
-        func=mdp.apply_external_force_torque,
-        mode="reset",
+    add_base_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-            "force_range": (0.0, 0.0),
-            "torque_range": (-0.0, 0.0),
+            "asset_cfg": SceneEntityCfg("robot", body_names="trunk"),
+            "mass_distribution_params": (-1.0, 3.0),
+            "operation": "add",
         },
     )
+
+    # reset
+    # base_external_force_torque = EventTerm(
+    #     func=mdp.apply_external_force_torque,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names="trunk"),
+    #         "force_range": (0.0, 0.0),
+    #         "torque_range": (-0.0, 0.0),
+    #     },
+    # )
 
     reset_base = EventTerm(
         func=mdp.reset_root_state_uniform,
@@ -141,12 +184,12 @@ class A1EventCfg:
             "asset_cfg": SceneEntityCfg("robot"),
             "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
             "velocity_range": {
-                "x": (-1.5, 1.5),
-                "y": (-1.0, 1.0),
-                "z": (-0.5, 0.5),
-                "roll": (-0.7, 0.7),
-                "pitch": (-0.7, 0.7),
-                "yaw": (-1.0, 1.0),
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
             },
         },
     )
@@ -155,45 +198,49 @@ class A1EventCfg:
         func=a1_mdp.reset_joints_around_default,
         mode="reset",
         params={
-            "position_range": (-1.0, 1.0),
-            "velocity_range": (-1.0, 1.0),
+            "position_range": (0.5, 1.5),
+            "velocity_range": (0.0, 0.0),
             "asset_cfg": SceneEntityCfg("robot"),
         },
     )
 
     # interval
-    push_robot = EventTerm(
-        func=mdp.push_by_setting_velocity,
-        mode="interval",
-        interval_range_s=(10.0, 15.0),
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-            "velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)},
-        },
-    )
+    # push_robot = EventTerm(
+    #     func=mdp.push_by_setting_velocity,
+    #     mode="interval",
+    #     interval_range_s=(10.0, 15.0),
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot"),
+    #         "velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)},
+    #     },
+    # )
 
 @configclass
 class A1RewardsCfg:
     # -- task
-    air_time = RewardTermCfg(
-        func=a1_mdp.air_time_reward,
-        weight=0.5,
-        params={
-            "mode_time": 0.3,
-            "velocity_threshold": 0.5,
-            "asset_cfg": SceneEntityCfg("robot"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
-        },
+    # air_time = RewardTermCfg(
+    #     func=a1_mdp.feet_air_time,
+    #     weight=0.1,
+    #     params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+    #             "command_name": "position_command",
+    #             "threshold": 0.5,},
+    # )
+    termination_penalty = RewardTermCfg(func=mdp.is_terminated, weight=-400.0)
+
+    position_tracking = RewardTermCfg(
+        func=a1_mdp.position_command_error_tanh,
+        weight=5.0,
+        params={"std": 2.0, "command_name": "pose_command"},
     )
-    base_angular_velocity = RewardTermCfg(
-        func=a1_mdp.base_angular_velocity_reward,
-        weight=0.5,
-        params={"std": 2.0, "asset_cfg": SceneEntityCfg("robot")},
+    position_tracking_fine_grained = RewardTermCfg(
+        func=a1_mdp.position_command_error_tanh,
+        weight=5.0,
+        params={"std": 0.2, "command_name": "pose_command"},
     )
-    base_linear_velocity = RewardTermCfg(
-        func=a1_mdp.base_linear_velocity_reward,
-        weight=1.5,
-        params={"std": 1.0, "ramp_rate": 0.5, "ramp_at_vel": 1.0, "asset_cfg": SceneEntityCfg("robot")},
+    orientation_tracking = RewardTermCfg(
+        func=a1_mdp.heading_command_error_abs,
+        weight=-0.3,
+        params={"command_name": "pose_command"},
     )
     foot_clearance = RewardTermCfg(
         func=a1_mdp.foot_clearance_reward,
@@ -201,26 +248,31 @@ class A1RewardsCfg:
         params={
             "std": 0.05,
             "tanh_mult": 2.0,
-            "target_height": 0.2,
+            "target_height": 0.1,
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
         },
     )
 
+    # goal_achievement = RewardTermCfg(
+    #     func=a1_mdp.goal_achievement_reward,
+    #     params={"goals": goals, "current_goal_index": 0, "asset_cfg": SceneEntityCfg("robot")},
+# )
+
     # -- penalties
 
-    base_motion = RewardTermCfg(
-        func=a1_mdp.base_motion_penalty, weight=-1.0, params={"asset_cfg": SceneEntityCfg("robot")}
-    )
+    # base_motion = RewardTermCfg(
+    #     func=a1_mdp.base_motion_penalty, weight=-0.5, params={"asset_cfg": SceneEntityCfg("robot")}
+    # )
 
-    base_angular_motion = RewardTermCfg(
-        func=a1_mdp.base_angular_motion_penalty, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot")}
-    )
+    # base_angular_motion = RewardTermCfg(
+    #     func=a1_mdp.base_angular_motion_penalty, weight=-0.1, params={"asset_cfg": SceneEntityCfg("robot")}
+    # )
 
-    base_orientation = RewardTermCfg(
-        func=a1_mdp.base_orientation_penalty, weight=-1.0, params={"asset_cfg": SceneEntityCfg("robot")}
-    )
+    # base_orientation = RewardTermCfg(
+    #     func=a1_mdp.base_orientation_penalty, weight=-1.0, params={"asset_cfg": SceneEntityCfg("robot")}
+    # )
 
-    action_smoothness = RewardTermCfg(func=a1_mdp.action_smoothness_penalty, weight=-0.001)
+    action_smoothness = RewardTermCfg(func=a1_mdp.action_smoothness_penalty, weight=-0.01)
 
     foot_slip = RewardTermCfg(
         func=a1_mdp.foot_slip_penalty,
@@ -234,7 +286,7 @@ class A1RewardsCfg:
 
     collision = RewardTermCfg(
         func=a1_mdp.collision,
-        weight=-10.0,
+        weight=-5.0,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=[".*_calf", ".*_thigh"]),
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=[".*_calf", ".*_thigh"]),
@@ -242,47 +294,33 @@ class A1RewardsCfg:
         }
     )
 
-    feet_stumble = RewardTermCfg(
-        func=a1_mdp.contact_penality,
-        weight=-1,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
-        }
-    )
+    # feet_stumble = RewardTermCfg(
+    #     func=a1_mdp.contact_penality,
+    #     weight=-1.0,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
+    #         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+    #     }
+    # )
 
     joint_acc = RewardTermCfg(
         func=a1_mdp.joint_acceleration_penalty,
-        weight=-1.0e-4,
+        weight=-2.5e-7,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
-    )
-    joint_pos = RewardTermCfg(
-        func=a1_mdp.joint_position_penalty,
-        weight=-0.04,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_thigh_joint", ".*_calf_joint"]),
-            "stand_still_scale": 5.0,
-            "velocity_threshold": 0.5,
-        },
-    )
-    hip_pos = RewardTermCfg(
-        func=a1_mdp.joint_position_penalty,
-        weight=-0.5,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=".*_hip_joint"),
-            "stand_still_scale": 5.0,
-            "velocity_threshold": 0.5,
-        },
     )
     joint_torques = RewardTermCfg(
         func=a1_mdp.joint_torques_penalty,
-        weight=-1.0e-4,
+        weight=-1.0e-7,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
     )
     joint_vel = RewardTermCfg(
         func=a1_mdp.joint_velocity_penalty,
         weight=-1.0e-2,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
+    )
+    joint_pos_limits = RewardTermCfg(
+        func=a1_mdp.joint_pos_limits,
+        weight=-0.004,
     )
 
 @configclass
@@ -292,19 +330,20 @@ class A1TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     body_contact = DoneTerm(
         func=mdp.illegal_contact,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"), "threshold": 1.0},
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="trunk"), "threshold": 1.0},
     )
 
 
 @configclass
 class A1CurriculumCfg:
-    """Curriculum terms for the MDP."""
 
-    pass
+    terrain_levels = CurrTerm(func=a1_mdp.terrain_levels_vel)
+
 
 @configclass
 class A1EnvCfg(LocomotionVelocityRoughEnvCfg):
 
+    
     # Basic settings'
     observations: A1ObservationsCfg = A1ObservationsCfg()
     actions: A1ActionsCfg = A1ActionsCfg()
@@ -338,8 +377,9 @@ class A1EnvCfg(LocomotionVelocityRoughEnvCfg):
         # we tick all the sensors based on the smallest update period (physics update period)
         self.scene.contact_forces.update_period = self.sim.dt
 
-        # switch robot to Spot-d
+        # switch robot to A1
         self.scene.robot = UNITREE_A1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        
 
         # terrain
         self.scene.terrain = TerrainImporterCfg(
@@ -359,10 +399,32 @@ class A1EnvCfg(LocomotionVelocityRoughEnvCfg):
                 project_uvw=True,
                 texture_scale=(0.25, 0.25),
             ),
-            debug_vis=True,
+            debug_vis=False,
         )
 
-        # no height scan
+        
+
+        # coordinates_list = [goal['coordinates'] for goal in goals]
+
+        # for i, origin in enumerate(coordinates_list):
+        #     prim_utils.create_prim(f"/World/Origin{i}", "Xform", translation=origin)
+        # # Defomrable Object
+
+        # for i, origin in enumerate(coordinates_list):
+        #     cfg = DeformableObjectCfg(
+        #         prim_path=f"/World/Origin{i}/Cube",
+        #         spawn=sim_utils.MeshCuboidCfg(
+        #             size=(0.2, 0.2, 0.2),
+        #             deformable_props=sim_utils.DeformableBodyPropertiesCfg(rest_offset=0.0, contact_offset=0.001),
+        #             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.5, 0.1, 0.0)),
+        #             physics_material=sim_utils.DeformableBodyMaterialCfg(poissons_ratio=0.4, youngs_modulus=1e5),),
+        #         init_state=DeformableObjectCfg.InitialStateCfg(),
+
+        #         debug_vis=True,)
+
+        #     goal_object = DeformableObject(cfg=cfg)
+
+        # height scan
         self.scene.height_scanner = None
 
 class A1EnvCfg_PLAY(A1EnvCfg):

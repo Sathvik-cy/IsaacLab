@@ -4,7 +4,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 
-"""This sub-module contains the functions that are specific to the Spot locomotion task."""
+"""This sub-module contains the functions that are specific to the A1 locomotion task."""
 
 from .events import *  # noqa: F401, F403
 from .rewards import *  # noqa: F401, F403
+from .pre_trained_policy_action import * # noqa: F401, F403
+from .curriculums import *  # noqa: F401, F403
