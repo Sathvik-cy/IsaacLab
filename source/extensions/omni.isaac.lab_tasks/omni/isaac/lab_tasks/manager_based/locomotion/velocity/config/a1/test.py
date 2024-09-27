@@ -1,7 +1,12 @@
+# Copyright (c) 2022-2024, The Isaac Lab Project Developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 import argparse
 
-
 from omni.isaac.lab.app import AppLauncher
+
 parser = argparse.ArgumentParser(description="Test.py")
 AppLauncher.add_app_launcher_args(parser)
 
@@ -14,30 +19,32 @@ args_cli = parser.parse_args()
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-import omni.isaac.lab.sim as sim_utils
+import math
+import numpy as np
+import torch
+from dataclasses import MISSING
+
 import omni.isaac.core.utils.prims as prim_utils
-import omni.isaac.lab.terrains as terrain_gen
-from omni.isaac.lab.envs import ViewerCfg
-from omni.isaac.lab.managers import SceneEntityCfg
-from omni.isaac.lab.scene import InteractiveScene, InteractiveSceneCfg
+
 from omni.isaac.lab_assets.unitree import UNITREE_A1_CFG
-from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg
-from omni.isaac.lab.envs import ManagerBasedRLEnvCfg
+
+import omni.isaac.lab.sim as sim_utils
+import omni.isaac.lab.terrains as terrain_gen
+from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, DeformableObject, DeformableObjectCfg
+from omni.isaac.lab.envs import ManagerBasedRLEnvCfg, ViewerCfg
 from omni.isaac.lab.managers import CurriculumTermCfg as CurrTerm
 from omni.isaac.lab.managers import EventTermCfg as EventTerm
 from omni.isaac.lab.managers import ObservationGroupCfg as ObsGroup
 from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
 from omni.isaac.lab.managers import RewardTermCfg as RewTerm
+from omni.isaac.lab.managers import SceneEntityCfg
 from omni.isaac.lab.managers import TerminationTermCfg as DoneTerm
+from omni.isaac.lab.scene import InteractiveScene, InteractiveSceneCfg
 from omni.isaac.lab.sensors import ContactSensorCfg, RayCasterCfg, patterns
-from omni.isaac.lab.assets import DeformableObject, DeformableObjectCfg
+from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from omni.isaac.lab.utils.noise import AdditiveUniformNoiseCfg as Unoise
-from omni.isaac.lab.utils import configclass
-import numpy as np
-import torch
-import math
-from dataclasses import MISSING
+
 
 @configclass
 class MySceneCfg(InteractiveSceneCfg):
@@ -61,7 +68,6 @@ class MySceneCfg(InteractiveSceneCfg):
     )
 
     # Generate the terrain
-    
 
     # Add the robot to the environment
     robot: ArticulationCfg = UNITREE_A1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
@@ -84,6 +90,7 @@ class MySceneCfg(InteractiveSceneCfg):
             texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
         ),
     )
+
 
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     robot = scene["UnitreeA1"]
@@ -119,7 +126,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                     weight = np.random.uniform(0.5, 2.0)  # Assign random weights between 0.5 and 2.0
                     goals.append({"coordinates": (x, y, z), "weight": weight})
                 return goals
-            size=[8.0, 8.0]
+
+            size = [8.0, 8.0]
             # Define terrain boundaries based on the terrain configuration
             x_min, x_max = -size[0] / 2, size[0] / 2
             y_min, y_max = -size[1] / 2, size[1] / 2
@@ -129,13 +137,13 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             num_goals = 10  # Number of goals to generate
             goals = generate_random_goals(num_goals, x_min, x_max, y_min, y_max, z_min, z_max)
 
-            coordinates_list = [goal['coordinates'] for goal in goals]
+            coordinates_list = [goal["coordinates"] for goal in goals]
 
             for i, origin in enumerate(coordinates_list):
                 prim_utils.create_prim(f"/World/Origin{i}", "Xform", translation=origin)
             # Defomrable Object
 
-            goal_object=[]
+            goal_object = []
             for i, origin in enumerate(coordinates_list):
                 cfg = DeformableObjectCfg(
                     prim_path=f"/World/Origin{i}/Cube",
@@ -143,12 +151,12 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                         size=(0.2, 0.2, 0.2),
                         deformable_props=sim_utils.DeformableBodyPropertiesCfg(rest_offset=0.0, contact_offset=0.001),
                         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.5, 0.1, 0.0)),
-                        physics_material=sim_utils.DeformableBodyMaterialCfg(poissons_ratio=0.4, youngs_modulus=1e5),),
+                        physics_material=sim_utils.DeformableBodyMaterialCfg(poissons_ratio=0.4, youngs_modulus=1e5),
+                    ),
                     init_state=DeformableObjectCfg.InitialStateCfg(),
+                    debug_vis=True,
+                )
 
-                    debug_vis=True,)
-
-                
                 goal_object.append(DeformableObject(cfg=cfg))
         # Apply random action
         # -- generate random joint efforts
@@ -173,7 +181,7 @@ def main():
     # Set main camera
     sim.set_camera_view([2.5, 0.0, 4.0], [0.0, 0.0, 2.0])
     # Design scene
-    scene_cfg = MySceneCfg(num_envs = 2, env_spacing=2.0)
+    scene_cfg = MySceneCfg(num_envs=2, env_spacing=2.0)
     scene = InteractiveScene(scene_cfg)
     # Play the simulator
     sim.reset()
@@ -189,4 +197,3 @@ if __name__ == "__main__":
     # close sim app
     simulation_app.close()
     # Function to generate random goals
-    

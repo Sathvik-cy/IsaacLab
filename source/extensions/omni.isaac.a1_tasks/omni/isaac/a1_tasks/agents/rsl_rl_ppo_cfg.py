@@ -1,10 +1,6 @@
-# Copyright (c) 2022-2024, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+
 
 from omni.isaac.lab.utils import configclass
-
 from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
     RslRlOnPolicyRunnerCfg,
     RslRlPpoActorCriticCfg,
@@ -13,16 +9,17 @@ from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
 
 
 @configclass
-class UnitreeA1RoughPPORunnerCfg(RslRlOnPolicyRunnerCfg):
+class A1PPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
-    max_iterations = 2000
-    save_interval = 100
-    experiment_name = "unitree_a1_rough"
+    max_iterations = 20000
+    save_interval = 500
+    experiment_name = "a1"
     empirical_normalization = False
     policy = RslRlPpoActorCriticCfg(
+        class_name="ActorCritic",
         init_noise_std=1.0,
         actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
+        critic_hidden_dims=[512, 128, 128],
         activation="elu",
     )
     algorithm = RslRlPpoAlgorithmCfg(
@@ -39,14 +36,3 @@ class UnitreeA1RoughPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
-
-
-@configclass
-class UnitreeA1FlatPPORunnerCfg(UnitreeA1RoughPPORunnerCfg):
-    def __post_init__(self):
-        super().__post_init__()
-
-        self.max_iterations = 300
-        self.experiment_name = "unitree_a1_flat"
-        self.policy.actor_hidden_dims = [128, 128, 128]
-        self.policy.critic_hidden_dims = [128, 128, 128]

@@ -42,6 +42,7 @@ import gymnasium as gym
 import os
 import torch
 
+import omni.isaac.a1_tasks  # noqa: F401
 from rsl_rl.runners import OnPolicyRunner
 
 from omni.isaac.lab.utils.dict import print_dict

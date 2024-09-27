@@ -49,6 +49,7 @@ import os
 import torch
 from datetime import datetime
 
+import omni.isaac.a1_tasks  # noqa: F401
 from rsl_rl.runners import OnPolicyRunner
 
 from omni.isaac.lab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
