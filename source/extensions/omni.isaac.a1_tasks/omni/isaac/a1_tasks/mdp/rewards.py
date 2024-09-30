@@ -59,6 +59,47 @@ def heading_command_error_abs(env: ManagerBasedRLEnv, command_name: str) -> torc
     heading_b = command[:, 3]
     return heading_b.abs()
 
+def position_tracking_reward(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
+    # Access the pose_command term
+    pose_command_term = env.command_manager.get_term('pose_command')
+
+    # Access the target positions
+    target_pos = pose_command_term.target_positions  # Shape: (num_envs, 3)
+
+    # Get the robot's current position
+    asset: RigidObject = env.scene["robot"]
+    robot_pos = asset.data.root_pos_w  # Shape: (num_envs, 3)
+
+    # Calculate the distance to the target position
+    distance = torch.norm(target_pos - robot_pos, dim=1)
+
+    # Compute the reward based on the distance
+    reward = torch.exp(-distance / std)
+
+    return reward
+
+def goal_achievement_reward(env: ManagerBasedRLEnv, success_threshold: float) -> torch.Tensor:
+    # Access the pose_command term
+    pose_command_term = env.command_manager.get_term('pose_command')
+
+    # Access the target positions
+    target_pos = pose_command_term.target_positions
+
+    # Get the robot's current position
+    asset: RigidObject = env.scene["robot"]
+    robot_pos = asset.data.root_pos_w
+
+    # Calculate the distance to the target position
+    distance = torch.norm(target_pos - robot_pos, dim=1)
+
+    # Check if the robot is within the success threshold
+    success = (distance < success_threshold).float()
+
+    # Assign a high reward for reaching the goal
+    reward = success * 100.0  # Adjust the reward value as needed
+
+    return reward
+
 
 
 
@@ -184,22 +225,6 @@ def contact_penality(
     
 
     return reward.float()
-
-def goal_achievement_reward(
-        env: ManagerBasedRLEnv , asset_cfg: SceneEntityCfg, goals, current_goal_index):
-    asset = env.scene[asset_cfg.name]
-    robot_position = asset.data.body_pos_w[:, 0, :]  # Assuming the robot's main body is at index 0
-    current_goal = goals[current_goal_index]
-    goal_position = current_goal["coordinates"]
-    weight = current_goal["weight"]
-
-    # Calculate distance to the goal
-    distance = torch.linalg.norm(robot_position - torch.tensor(goal_position, device=robot_position.device), dim=-1)
-
-    # Reward is inversely proportional to the distance, weighted by the goal's weight
-    reward = weight / (distance + 1e-6)  # Add a small value to avoid division by zero
-
-    return reward
 
 def joint_pos_limits(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """Penalize joint positions if they cross the soft limits.

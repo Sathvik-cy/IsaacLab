@@ -139,6 +139,11 @@ class A1ObservationsCfg:
         )
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         pose_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "pose_command"})
+        heading_error = ObsTerm(
+            func=mdp.heading_command_error,
+            params={"command_name": "pose_command"},
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+        )
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-1.5, n_max=1.5))
         # height_scan = ObsTerm(
@@ -246,7 +251,7 @@ class A1RewardsCfg:
     )
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-400.0)
 
-    position_tracking = RewTerm(
+    position_command_error = RewTerm(
         func=mdp.position_command_error_tanh,
         weight=5.0,
         params={"std": 2.0, "command_name": "pose_command"},
@@ -272,10 +277,21 @@ class A1RewardsCfg:
     #     },
     # )
 
-    # goal_achievement = RewTerm(
-    #     func=mdp.goal_achievement_reward,
-    #     params={"goals": goals, "current_goal_index": 0, "asset_cfg": SceneEntityCfg("robot")},
-# )
+     # -- task rewards
+    position_tracking = RewTerm(
+        func=mdp.position_tracking_reward,
+        weight=10.0,
+        params={"std": 1.0},
+    )
+
+    # If you have a goal achievement reward
+    goal_achievement = RewTerm(
+        func=mdp.goal_achievement_reward,
+        weight=20.0,
+        params={
+            "success_threshold": 0.1,  # Adjust as needed
+        },
+    )
 
     # -- penalties
 

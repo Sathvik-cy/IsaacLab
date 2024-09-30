@@ -92,6 +92,20 @@ def root_ang_vel_w(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntity
     asset: RigidObject = env.scene[asset_cfg.name]
     return asset.data.root_ang_vel_w
 
+def heading_command_error(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    # Access the heading command
+    command = env.command_manager.get_command(command_name)
+    desired_heading = command[:, 3]  # Shape: (num_envs,)
+
+    # Get the robot's current heading
+    current_heading = env.scene["robot"].data.heading_w  # Shape: (num_envs,)
+
+    # Compute heading error and wrap it to [-π, π]
+    heading_error = math_utils.wrap_to_pi(desired_heading - current_heading).unsqueeze(1)  # Shape: (num_envs, 1)
+
+    return heading_error
+
+
 
 """
 Joint state.

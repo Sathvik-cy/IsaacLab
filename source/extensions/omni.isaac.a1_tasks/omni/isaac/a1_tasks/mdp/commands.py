@@ -11,11 +11,12 @@ from omni.isaac.lab.markers import VisualizationMarkers
 from omni.isaac.lab.terrains import TerrainImporter
 from omni.isaac.lab.utils.math import quat_from_euler_xyz, quat_rotate_inverse, wrap_to_pi, yaw_quat
 
-from .commandsCfg import Waypoint2dCommandCfg
+
 
 if TYPE_CHECKING:
     from omni.isaac.lab.envs import ManagerBasedEnv
 
+    from . import Waypoint2dCommandCfg
 
 
 
@@ -55,6 +56,9 @@ class Waypoint2dCommand(CommandTerm):
         # -- metrics
         self.metrics["error_pos"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_heading"] = torch.zeros(self.num_envs, device=self.device)
+        self._waypoints = [torch.empty((0, 3), device=self.device) for _ in range(self.num_envs)]
+        self._target_pos = torch.zeros(self.num_envs, 3, device=self.device)
+
 
     def __str__(self) -> str:
         msg = "PositionCommand:\n"
@@ -70,6 +74,15 @@ class Waypoint2dCommand(CommandTerm):
     def command(self) -> torch.Tensor:
         """The desired 2D-pose in base frame. Shape is (num_envs, 4)."""
         return torch.cat([self.pos_command_b, self.heading_command_b.unsqueeze(1)], dim=1)
+    @property
+    def target_positions(self) -> torch.Tensor:
+        """Expose the target positions."""
+        return self._target_pos
+
+    @property
+    def waypoints(self) -> list[torch.Tensor]:
+        """Expose the waypoints."""
+        return self._waypoints
 
     """
     Implementation specific functions.
@@ -93,12 +106,17 @@ class Waypoint2dCommand(CommandTerm):
             torch.Tensor: A tensor containing the waypoints (including current and final positions).
         """
         # Create a linear interpolation between the current and target positions
-        waypoints = torch.zeros(self.cfg.num_intermediates + 2, 3, device=self.device)
+        num_intermediates = self.cfg.num_intermediates 
+        batch_size = current_pos.shape[0]
+        waypoints = torch.zeros(batch_size, num_intermediates + 2, 3, device=self.device)
         
         # Interpolate between the current position and the target position
+        current_pos_expanded = current_pos.unsqueeze(1)  # Shape: (64, 1, 3)
+        target_pos_expanded = target_pos.unsqueeze(1)    # Shape: (64, 1, 3)
+
         for i in range(self.cfg.num_intermediates + 2):
             alpha = i / (self.cfg.num_intermediates + 1)  # Fraction along the path
-            waypoints[i] = current_pos * (1 - alpha) + target_pos * alpha
+            waypoints[:, i, :] = current_pos_expanded[:, 0, :] * (1 - alpha) + target_pos_expanded[:, 0, :] * alpha
 
         return waypoints
 
@@ -108,22 +126,23 @@ class Waypoint2dCommand(CommandTerm):
 
         # offset the position command by the current root position
         r = torch.empty(len(env_ids), device=self.device)
-        self.target_pos = self.pos_command_w[env_ids].clone()
-        self.target_pos[:, 0] += r.uniform_(*self.cfg.ranges.pos_x)
-        self.target_pos[:, 1] += r.uniform_(*self.cfg.ranges.pos_y)
-        self.target_pos[:, 2] += self.robot.data.default_root_state[env_ids, 2]
+        self._target_pos[env_ids] = self.pos_command_w[env_ids].clone()
+        self._target_pos[env_ids, 0] += r.uniform_(*self.cfg.ranges.pos_x)
+        self._target_pos[env_ids, 1] += r.uniform_(*self.cfg.ranges.pos_y)
+        self._target_pos[env_ids, 2] += self.robot.data.default_root_state[env_ids, 2]
 
         current_pos = self.robot.data.root_pos_w[env_ids].clone()
 
         # Generate 5 intermediate positions between the current and target positions
-        waypoints = self._generate_intermediate_positions(current_pos, self.target_pos, num_intermediates=5)
+        waypoints = self._generate_intermediate_positions(current_pos, self._target_pos[env_ids])
 
         # Save the intermediate positions for the robot to follow
-        self.waypoints = waypoints
+        for idx, env_idx in enumerate(env_ids):
+            self._waypoints[env_idx] = waypoints[idx]
 
         if self.cfg.simple_heading:
             # set heading command to point towards target
-            target_vec = self.target_pos - current_pos
+            target_vec = self._target_pos[env_ids] - current_pos
             target_direction = torch.atan2(target_vec[:, 1], target_vec[:, 0])
             flipped_target_direction = wrap_to_pi(target_direction + torch.pi)
 
@@ -133,11 +152,7 @@ class Waypoint2dCommand(CommandTerm):
             curr_to_flipped_target = wrap_to_pi(flipped_target_direction - self.robot.data.heading_w[env_ids]).abs()
 
             # set the heading command to the closest direction
-            self.heading_command_w[env_ids] = torch.where(
-                curr_to_target < curr_to_flipped_target,
-                target_direction,
-                flipped_target_direction,
-            )
+            self.heading_command_w[env_ids] = target_direction
         else:
             # random heading command
             self.heading_command_w[env_ids] = r.uniform_(*self.cfg.ranges.heading)
@@ -146,22 +161,51 @@ class Waypoint2dCommand(CommandTerm):
         """
         Update the robot's command to follow the next waypoint.
         """
+        # Prepare a tensor to hold the current waypoints
+        current_waypoints = torch.zeros(len(env_ids), 3, device=self.device)
+        
+        for i, env_idx in enumerate(env_ids):
+            if self.waypoints[env_idx].shape[0] > 0:
+                # If waypoints are available, use the next waypoint
+                current_waypoints[i, :] = self.waypoints[env_idx][0, :]
+            else:
+                # No waypoints left, use the target position
+                current_waypoints[i, :] = self._target_pos[env_idx]
+        
         # Calculate the distance to the next waypoint
-        distance_to_waypoint = torch.norm(self.robot.data.root_pos_w[env_ids, :2] - self.waypoints[0, :2], dim=1)
-
+        distance_to_waypoint = torch.norm(
+            self.robot.data.root_pos_w[env_ids, :2] - current_waypoints[:, :2], dim=1
+        )
+        
         # Threshold distance to consider waypoint reached
-        waypoint_threshold = 0.05  # You can adjust this value as needed
+        waypoint_threshold = 0.05  # Adjust as needed
+        
+        # Identify environments that have reached their current waypoint
+        reached_waypoints = distance_to_waypoint < waypoint_threshold
+        if reached_waypoints.any():
+            # Get indices of environments that have reached the waypoint
+            reached_envs = reached_waypoints.nonzero(as_tuple=False).squeeze(-1)
+            for idx in reached_envs:
+                env_idx = env_ids[idx]
+                # Remove the first waypoint for this environment
+                if self.waypoints[env_idx].shape[0] > 1:
+                    self.waypoints[env_idx] = self.waypoints[env_idx][1:, :]
+                else:
+                    # No more waypoints left
+                    self.waypoints[env_idx] = torch.empty((0, 3), device=self.device)
+        
+        # Update the command to follow the next waypoint or target position
+        for i, env_idx in enumerate(env_ids):
+            if self.waypoints[env_idx].shape[0] > 0:
+                # Set the next waypoint as the command
+                self.pos_command_w[env_idx] = self.waypoints[env_idx][0, :]
+            else:
+                # Set the final target if no waypoints are left
+                self.pos_command_w[env_idx] = self._target_pos[env_idx]
 
-        # If robot is close to the current waypoint, move to the next one
-        if distance_to_waypoint < waypoint_threshold:
-            # Remove the first waypoint (current waypoint) from the list
-            self.waypoints = self.waypoints[1:]
 
-        # Update the command to follow the next waypoint
-        if len(self.waypoints) > 0:
-            self.pos_command_w[env_ids] = self.waypoints[0]  # Set the next waypoint as the command
-        else:
-            self.pos_command_w[env_ids] = self.target_pos  # Set the final target if no waypoints are left
+
+
 
     def _update_command(self):
         """Re-target the position command to the current root state."""
@@ -170,7 +214,9 @@ class Waypoint2dCommand(CommandTerm):
 
         target_vec = self.pos_command_w - self.robot.data.root_pos_w[:, :3]
         self.pos_command_b[:] = quat_rotate_inverse(yaw_quat(self.robot.data.root_quat_w), target_vec)
-        self.heading_command_b[:] = wrap_to_pi(self.heading_command_w - self.robot.data.heading_w)
+        heading_error = wrap_to_pi(self.heading_command_w - self.robot.data.heading_w)
+        heading_error = torch.atan2(torch.sin(heading_error), torch.cos(heading_error))
+        self.heading_command_b[:] = heading_error
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the first tome
@@ -201,13 +247,19 @@ class Waypoint2dCommand(CommandTerm):
                 self.heading_command_w,
             ),
         )
-        
+
         # Create a marker for each waypoint
-        self.waypoint_visualizer.visualize(
-            translations = self.waypoints[:, :3],  # Get 3D coordinates of waypoints (x, y, z)
-            orientations = quat_from_euler_xyz(
-                torch.zeros_like(self.waypoints[:, 0]),  # No rotation in x-axis
-                torch.zeros_like(self.waypoints[:, 1]),  # No rotation in y-axis
-                self.heading_command_w  # Apply heading (rotation around z-axis)
-            ),
-        )
+        all_waypoints = []
+        for env_waypoints in self.waypoints:
+            if env_waypoints.shape[0] > 0:
+                all_waypoints.append(env_waypoints)
+        if all_waypoints:
+            waypoints_tensor = torch.cat(all_waypoints, dim=0)
+            self.waypoint_visualizer.visualize(
+                translations=waypoints_tensor[:, :3],
+                orientations=quat_from_euler_xyz(
+                    torch.zeros(waypoints_tensor.shape[0], device=self.device),
+                    torch.zeros(waypoints_tensor.shape[0], device=self.device),
+                    torch.zeros(waypoints_tensor.shape[0], device=self.device),  # No specific orientation
+                ),
+            )
